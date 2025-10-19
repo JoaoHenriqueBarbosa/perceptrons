@@ -4,7 +4,6 @@ import json
 from typing import List, Tuple, Dict
 from perceptron import Perceptron
 
-
 class MultiPerceptron:
     """
     Múltiplos perceptrons para classificação multi-classe usando codificação binária.
