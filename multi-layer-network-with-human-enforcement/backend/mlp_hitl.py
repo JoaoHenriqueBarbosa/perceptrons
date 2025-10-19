@@ -197,15 +197,26 @@ class MLP_HITL(MLP):
 
     def save_model(self, filepath: str):
         """Salva modelo incluindo histórico de feedback."""
+        # Converter feedback_history para tipos nativos Python
+        clean_feedback = []
+        for feedback in self.feedback_history:
+            clean_feedback.append({
+                'timestamp': str(feedback['timestamp']),
+                'correct_label': str(feedback['correct_label']),
+                'prediction_before': str(feedback['prediction_before']),
+                'prediction_after': str(feedback['prediction_after']),
+                'improved': bool(feedback['improved'])
+            })
+
         model_data = {
             'layer_sizes': self.layer_sizes,
-            'learning_rate': self.learning_rate,
+            'learning_rate': float(self.learning_rate),
             'label_to_index': self.label_to_index,
             'index_to_label': {str(k): v for k, v in self.index_to_label.items()},
             'weights': [w.tolist() for w in self.weights],
             'biases': [b.tolist() for b in self.biases],
-            'feedback_history': self.feedback_history,
-            'uncertainty_threshold': self.uncertainty_threshold
+            'feedback_history': clean_feedback,
+            'uncertainty_threshold': float(self.uncertainty_threshold)
         }
 
         with open(filepath, 'w') as f:
