@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import List
 import json
 import os
-from multi_perceptron import MultiPerceptron, load_patterns_from_db
+from mlp import MLP, load_patterns_from_db
+import numpy as np
 
 app = FastAPI()
 
@@ -97,7 +98,9 @@ async def delete_pattern(pattern_id: int):
 
 class TrainingConfig(BaseModel):
     epochs: int
-    neurons: int
+    hidden_layers: List[int]  # Ex: [128, 64] para duas camadas ocultas
+    learning_rate: float = 0.1
+    batch_size: int = 32
 
 class PredictionRequest(BaseModel):
     model_id: str
@@ -110,7 +113,7 @@ class BulkLabelUpdate(BaseModel):
 @app.post("/api/train")
 async def train_model(config: TrainingConfig):
     """
-    Treina um modelo com N neurônios.
+    Treina um modelo MLP (Multi-Layer Perceptron).
     """
     try:
         # Carregar dados do banco
@@ -120,25 +123,22 @@ async def train_model(config: TrainingConfig):
         if len(X) == 0:
             raise HTTPException(status_code=400, detail="Nenhum padrão no banco de dados")
 
-        unique_labels = len(set(y))
-        max_classes = 2 ** config.neurons
+        num_classes = len(set(y))
 
-        if unique_labels > max_classes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Número de classes ({unique_labels}) excede capacidade de {config.neurons} neurônios ({max_classes} classes)"
-            )
+        # Construir arquitetura: entrada -> camadas ocultas -> saída
+        layer_sizes = [256] + config.hidden_layers + [num_classes]
 
         # Criar e treinar modelo
-        model = MultiPerceptron(input_size=256, num_neurons=config.neurons, learning_rate=0.01)
-        train_info = model.train(X, y, epochs=config.epochs)
+        model = MLP(layer_sizes=layer_sizes, learning_rate=config.learning_rate)
+        train_info = model.train(X, y, epochs=config.epochs, batch_size=config.batch_size)
 
         # Avaliar
         metrics = model.evaluate(X, y)
 
         # Salvar modelo
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_filename = f"models/model_{config.neurons}n_{timestamp}.json"
+        arch_str = '_'.join(map(str, layer_sizes))
+        model_filename = f"models/mlp_{arch_str}_{timestamp}.json"
         os.makedirs('models', exist_ok=True)
         model.save_model(model_filename)
 
@@ -148,34 +148,39 @@ async def train_model(config: TrainingConfig):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS trained_models (
                 id TEXT PRIMARY KEY,
-                neurons INTEGER,
+                architecture TEXT,
                 epochs INTEGER,
                 accuracy REAL,
+                final_loss REAL,
                 classes_count INTEGER,
                 model_path TEXT,
+                learning_rate REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        model_id = f"{config.neurons}n_{timestamp}"
+        model_id = f"mlp_{timestamp}"
         cursor.execute(
             '''INSERT INTO trained_models
-               (id, neurons, epochs, accuracy, classes_count, model_path)
-               VALUES (?, ?, ?, ?, ?, ?)''',
-            (model_id, config.neurons, train_info['epochs_executed'],
-             metrics['accuracy'], unique_labels, model_filename)
+               (id, architecture, epochs, accuracy, final_loss, classes_count, model_path, learning_rate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (model_id, json.dumps(layer_sizes), train_info['epochs'],
+             metrics['accuracy'], train_info['final_loss'], num_classes,
+             model_filename, config.learning_rate)
         )
         conn.commit()
         conn.close()
 
         return {
             "model_id": model_id,
-            "neurons": config.neurons,
-            "epochs_executed": train_info['epochs_executed'],
-            "convergence": train_info['convergence'],
+            "architecture": layer_sizes,
+            "epochs": train_info['epochs'],
+            "final_loss": train_info['final_loss'],
+            "final_accuracy": train_info['final_accuracy'],
             "accuracy": metrics['accuracy'],
-            "classes_count": unique_labels,
-            "label_mapping": train_info['label_mapping']
+            "classes_count": num_classes,
+            "label_mapping": train_info['label_mapping'],
+            "history": train_info['history']
         }
 
     except ValueError as e:
@@ -195,17 +200,19 @@ async def get_models():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trained_models (
             id TEXT PRIMARY KEY,
-            neurons INTEGER,
+            architecture TEXT,
             epochs INTEGER,
             accuracy REAL,
+            final_loss REAL,
             classes_count INTEGER,
             model_path TEXT,
+            learning_rate REAL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
 
     cursor.execute('''
-        SELECT id, neurons, epochs, accuracy, classes_count, created_at
+        SELECT id, architecture, epochs, accuracy, final_loss, classes_count, learning_rate, created_at
         FROM trained_models
         ORDER BY created_at DESC
     ''')
@@ -214,13 +221,15 @@ async def get_models():
 
     models = []
     for row in rows:
-        model_id, neurons, epochs, accuracy, classes_count, created_at = row
+        model_id, architecture, epochs, accuracy, final_loss, classes_count, learning_rate, created_at = row
         models.append({
             "id": model_id,
-            "neurons": neurons,
+            "architecture": json.loads(architecture) if architecture else [],
             "epochs": epochs,
             "accuracy": accuracy,
+            "final_loss": final_loss,
             "classes_count": classes_count,
+            "learning_rate": learning_rate,
             "created_at": created_at
         })
 
@@ -276,28 +285,28 @@ async def bulk_update_labels(update: BulkLabelUpdate):
 @app.post("/api/predict")
 async def predict_pattern(request: PredictionRequest):
     """
-    Faz predição de um padrão usando modelo treinado.
+    Faz predição de um padrão usando modelo MLP treinado.
     """
     try:
         # Buscar caminho do modelo no banco
         conn = sqlite3.connect('patterns.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT model_path, neurons FROM trained_models WHERE id = ?', (request.model_id,))
+        cursor.execute('SELECT model_path, architecture FROM trained_models WHERE id = ?', (request.model_id,))
         row = cursor.fetchone()
         conn.close()
 
         if not row:
             raise HTTPException(status_code=404, detail="Modelo não encontrado")
 
-        model_path, neurons = row
+        model_path, architecture_json = row
+        architecture = json.loads(architecture_json)
 
         # Verificar se arquivo existe
         if not os.path.exists(model_path):
             raise HTTPException(status_code=404, detail="Arquivo do modelo não encontrado")
 
         # Carregar modelo
-        import numpy as np
-        model = MultiPerceptron(input_size=256, num_neurons=neurons)
+        model = MLP(layer_sizes=architecture)
         model.load_model(model_path)
 
         # Converter padrão para numpy array
@@ -307,14 +316,18 @@ async def predict_pattern(request: PredictionRequest):
         # Fazer predição
         prediction = model.predict(pattern_flat)
 
-        # Obter código binário
-        binary_code = tuple(neuron.predict(pattern_flat) for neuron in model.neurons)
-        binary_str = ''.join(map(str, binary_code))
+        # Obter probabilidades de todas as classes
+        probabilities = model.predict_proba(pattern_flat)
+
+        # Converter probabilidades para formato JSON-friendly
+        probs_dict = {}
+        for label, idx in model.label_to_index.items():
+            probs_dict[label] = float(probabilities[0][idx])
 
         return {
             "prediction": prediction,
-            "binary_code": binary_str,
-            "neurons": neurons
+            "probabilities": probs_dict,
+            "architecture": architecture
         }
 
     except HTTPException:
@@ -324,4 +337,4 @@ async def predict_pattern(request: PredictionRequest):
 
 @app.get("/")
 async def root():
-    return {"message": "Perceptrons API"}
+    return {"message": "Multi-Layer Perceptron (MLP) API"}

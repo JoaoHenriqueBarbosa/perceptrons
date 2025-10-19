@@ -126,8 +126,21 @@ class MLP:
 
     def update_weights(self, weight_gradients: List[np.ndarray],
                       bias_gradients: List[np.ndarray]):
-        """Atualiza pesos usando gradiente descendente."""
+        """Atualiza pesos usando gradiente descendente com gradient clipping."""
+        # Gradient clipping para evitar explosão de gradientes
+        max_norm = 5.0
+
         for i in range(len(self.weights)):
+            # Clip weight gradients
+            w_grad_norm = np.linalg.norm(weight_gradients[i])
+            if w_grad_norm > max_norm:
+                weight_gradients[i] = weight_gradients[i] * (max_norm / w_grad_norm)
+
+            # Clip bias gradients
+            b_grad_norm = np.linalg.norm(bias_gradients[i])
+            if b_grad_norm > max_norm:
+                bias_gradients[i] = bias_gradients[i] * (max_norm / b_grad_norm)
+
             self.weights[i] -= self.learning_rate * weight_gradients[i]
             self.biases[i] -= self.learning_rate * bias_gradients[i]
 
@@ -182,7 +195,7 @@ class MLP:
 
     def train(self, X_train: np.ndarray, y_train: List[str],
               epochs: int = 1000, batch_size: int = 32,
-              validation_split: float = 0.0) -> Dict:
+              validation_split: float = 0.0, early_stopping_patience: int = 50) -> Dict:
         """
         Treina a rede neural.
 
@@ -225,6 +238,12 @@ class MLP:
             print(f"Amostras de validação: {X_val.shape[0]}")
         print(f"Arquitetura: {' -> '.join(map(str, self.layer_sizes))}")
         print()
+
+        # Early stopping
+        best_loss = float('inf')
+        patience_counter = 0
+        best_weights = None
+        best_biases = None
 
         for epoch in range(epochs):
             # Embaralhar dados
@@ -276,6 +295,25 @@ class MLP:
                     print(f" - Val Loss: {val_loss:.4f} - Val Acc: {val_accuracy:.4f}")
                 else:
                     print()
+
+            # Early stopping
+            current_loss = train_loss if X_val is None else val_loss
+            if current_loss < best_loss:
+                best_loss = current_loss
+                patience_counter = 0
+                # Salvar melhores pesos
+                best_weights = [w.copy() for w in self.weights]
+                best_biases = [b.copy() for b in self.biases]
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                print(f"\nEarly stopping na época {epoch+1} (sem melhoria por {early_stopping_patience} épocas)")
+                # Restaurar melhores pesos
+                if best_weights is not None:
+                    self.weights = best_weights
+                    self.biases = best_biases
+                break
 
         # Métricas finais
         final_activations, _ = self.forward_propagation(X_train)
