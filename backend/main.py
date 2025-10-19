@@ -226,6 +226,25 @@ async def get_models():
 
     return models
 
+@app.delete("/api/models/{model_id}")
+async def delete_model(model_id: str):
+    """
+    Deleta um modelo treinado.
+    """
+    try:
+        conn = sqlite3.connect('patterns.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM trained_models WHERE id = ?', (model_id,))
+        deleted_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if deleted_rows > 0:
+            return {"message": "Modelo deletado com sucesso"}
+        else:
+            return {"message": "Modelo não encontrado"}, 404
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao deletar modelo: {str(e)}")
+
 @app.put("/api/patterns/bulk-update-labels")
 async def bulk_update_labels(update: BulkLabelUpdate):
     """

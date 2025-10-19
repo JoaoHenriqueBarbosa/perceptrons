@@ -77,6 +77,21 @@ export function Training() {
     return Math.pow(2, neurons)
   }
 
+  const deleteModel = async (modelId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/models/${modelId}`, {
+        method: 'DELETE',
+      })
+      if (response.ok) {
+        loadModels()
+      } else {
+        console.error('Erro ao deletar modelo')
+      }
+    } catch (error) {
+      console.error('Erro ao deletar modelo:', error)
+    }
+  }
+
   return (
     <div className="page training-page">
       <div className="training-container">
@@ -166,6 +181,13 @@ export function Training() {
                       {new Date(model.created_at).toLocaleString('pt-BR')}
                     </div>
                   </div>
+                  <button
+                    className="delete-btn"
+                    onClick={() => deleteModel(model.id)}
+                    disabled={isTraining}
+                  >
+                    Deletar
+                  </button>
                 </div>
               ))}
             </div>
