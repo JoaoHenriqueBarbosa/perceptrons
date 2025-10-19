@@ -2,25 +2,32 @@ import { useState, useEffect } from 'react'
 
 interface TrainingConfig {
   epochs: number
-  neurons: number
+  hidden_layers: number[]
+  learning_rate: number
+  batch_size: number
 }
 
 interface TrainedModel {
   id: string
-  neurons: number
+  architecture: number[]
   epochs: number
   accuracy: number
+  final_loss: number
+  learning_rate: number
   created_at: string
 }
 
 export function Training() {
   const [config, setConfig] = useState<TrainingConfig>({
-    epochs: 100,
-    neurons: 1
+    epochs: 300,
+    hidden_layers: [64, 32],
+    learning_rate: 0.3,
+    batch_size: 16
   })
   const [isTraining, setIsTraining] = useState(false)
   const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([])
   const [trainingLog, setTrainingLog] = useState<string[]>([])
+  const [hiddenLayersInput, setHiddenLayersInput] = useState('64,32')
 
   const loadModels = async () => {
     try {
@@ -40,7 +47,7 @@ export function Training() {
 
   const startTraining = async () => {
     setIsTraining(true)
-    setTrainingLog([])
+    setTrainingLog(['Iniciando treinamento...'])
 
     try {
       const response = await fetch('http://localhost:8000/api/train', {
@@ -54,27 +61,26 @@ export function Training() {
       if (response.ok) {
         const result = await response.json()
         setTrainingLog([
-          `Treinamento concluído!`,
-          `Neurônios: ${result.neurons}`,
-          `Épocas executadas: ${result.epochs_executed}`,
-          `Acurácia: ${(result.accuracy * 100).toFixed(2)}%`,
+          `✓ Treinamento concluído!`,
+          ``,
+          `Arquitetura: ${result.architecture.join(' → ')}`,
+          `Épocas: ${result.epochs}`,
+          `Loss final: ${result.final_loss.toFixed(4)}`,
+          `Acurácia final: ${(result.final_accuracy * 100).toFixed(2)}%`,
+          ``,
           `Classes detectadas: ${result.classes_count}`,
-          result.convergence ? `✓ Convergiu!` : `⚠ Não convergiu`
+          `Mapeamento: ${JSON.stringify(result.label_mapping, null, 2)}`
         ])
         loadModels()
       } else {
         const error = await response.json()
-        setTrainingLog([`Erro: ${error.detail || 'Erro ao treinar'}`])
+        setTrainingLog([`⚠ Erro: ${error.detail || 'Erro ao treinar'}`])
       }
     } catch (error) {
-      setTrainingLog([`Erro de conexão: ${error}`])
+      setTrainingLog([`⚠ Erro de conexão: ${error}`])
     } finally {
       setIsTraining(false)
     }
-  }
-
-  const getMaxClasses = (neurons: number) => {
-    return Math.pow(2, neurons)
   }
 
   const deleteModel = async (modelId: string) => {
@@ -92,32 +98,47 @@ export function Training() {
     }
   }
 
+  const handleHiddenLayersChange = (value: string) => {
+    setHiddenLayersInput(value)
+    try {
+      // Parse input like "128,64" or "128, 64" into array
+      const layers = value
+        .split(',')
+        .map(s => parseInt(s.trim()))
+        .filter(n => !isNaN(n) && n > 0)
+
+      if (layers.length > 0) {
+        setConfig({ ...config, hidden_layers: layers })
+      }
+    } catch (error) {
+      console.error('Erro ao parsear camadas:', error)
+    }
+  }
+
   return (
     <div className="page training-page">
       <div className="training-container">
         <div className="training-config">
-          <h2>Configuração de Treinamento</h2>
+          <h2>Configuração de Treinamento - MLP</h2>
 
           <div className="config-section">
             <label>
-              Número de Neurônios
+              Camadas Ocultas
               <div className="info-text">
-                {config.neurons} neurônio{config.neurons > 1 ? 's' : ''} = até {getMaxClasses(config.neurons)} classes
+                Arquitetura: 256 → {config.hidden_layers.join(' → ')} → (auto)
               </div>
             </label>
             <input
-              type="range"
-              min="1"
-              max="4"
-              value={config.neurons}
-              onChange={(e) => setConfig({ ...config, neurons: parseInt(e.target.value) })}
+              type="text"
+              placeholder="Ex: 128,64 ou 128"
+              value={hiddenLayersInput}
+              onChange={(e) => handleHiddenLayersChange(e.target.value)}
               disabled={isTraining}
+              className="text-input"
             />
-            <div className="range-labels">
-              <span>1 neurônio<br/>(2 classes)</span>
-              <span>2 neurônios<br/>(4 classes)</span>
-              <span>3 neurônios<br/>(8 classes)</span>
-              <span>4 neurônios<br/>(16 classes)</span>
+            <div className="info-text small">
+              Digite os tamanhos das camadas ocultas separados por vírgula.
+              Ex: "128,64" cria uma rede 256 → 128 → 64 → saída
             </div>
           </div>
 
@@ -128,16 +149,56 @@ export function Training() {
             </label>
             <input
               type="range"
-              min="10"
-              max="500"
-              step="10"
+              min="50"
+              max="1000"
+              step="50"
               value={config.epochs}
               onChange={(e) => setConfig({ ...config, epochs: parseInt(e.target.value) })}
               disabled={isTraining}
             />
             <div className="range-values">
-              <span>10</span>
-              <span>500</span>
+              <span>50</span>
+              <span>1000</span>
+            </div>
+          </div>
+
+          <div className="config-section">
+            <label>
+              Learning Rate
+              <div className="info-text">{config.learning_rate.toFixed(2)}</div>
+            </label>
+            <input
+              type="range"
+              min="0.05"
+              max="0.5"
+              step="0.05"
+              value={config.learning_rate}
+              onChange={(e) => setConfig({ ...config, learning_rate: parseFloat(e.target.value) })}
+              disabled={isTraining}
+            />
+            <div className="range-values">
+              <span>0.05</span>
+              <span>0.50</span>
+            </div>
+          </div>
+
+          <div className="config-section">
+            <label>
+              Batch Size
+              <div className="info-text">{config.batch_size} amostras por batch</div>
+            </label>
+            <input
+              type="range"
+              min="8"
+              max="64"
+              step="8"
+              value={config.batch_size}
+              onChange={(e) => setConfig({ ...config, batch_size: parseInt(e.target.value) })}
+              disabled={isTraining}
+            />
+            <div className="range-values">
+              <span>8</span>
+              <span>64</span>
             </div>
           </div>
 
@@ -152,9 +213,9 @@ export function Training() {
           {trainingLog.length > 0 && (
             <div className="training-log">
               <h3>Resultado</h3>
-              {trainingLog.map((line, i) => (
-                <div key={i} className="log-line">{line}</div>
-              ))}
+              <pre className="log-content">
+                {trainingLog.join('\n')}
+              </pre>
             </div>
           )}
         </div>
@@ -169,14 +230,18 @@ export function Training() {
               {trainedModels.map((model) => (
                 <div key={model.id} className="model-card">
                   <div className="model-header">
-                    <h3>{model.neurons} Neurônio{model.neurons > 1 ? 's' : ''}</h3>
+                    <h3>MLP</h3>
                     <span className="model-accuracy">
                       {(model.accuracy * 100).toFixed(1)}%
                     </span>
                   </div>
                   <div className="model-details">
+                    <div className="architecture-text">
+                      {model.architecture.join(' → ')}
+                    </div>
                     <div>Épocas: {model.epochs}</div>
-                    <div>Max classes: {getMaxClasses(model.neurons)}</div>
+                    <div>Loss: {model.final_loss.toFixed(4)}</div>
+                    <div>LR: {model.learning_rate}</div>
                     <div className="model-date">
                       {new Date(model.created_at).toLocaleString('pt-BR')}
                     </div>
@@ -196,15 +261,27 @@ export function Training() {
       </div>
 
       <div className="training-info">
-        <h3>Como funciona?</h3>
+        <h3>Multi-Layer Perceptron (MLP)</h3>
         <ul>
-          <li><strong>1 neurônio:</strong> Classificação binária (ex: T vs não-T)</li>
-          <li><strong>2 neurônios:</strong> Até 4 classes usando codificação binária (00, 01, 10, 11)</li>
-          <li><strong>3 neurônios:</strong> Até 8 classes (000, 001, 010, 011, 100, 101, 110, 111)</li>
-          <li><strong>N neurônios:</strong> Até 2^N classes</li>
+          <li><strong>Forward Propagation:</strong> Dados fluem da entrada através das camadas ocultas até a saída</li>
+          <li><strong>Função de Ativação:</strong> Sigmoid em todas as camadas (σ(z) = 1/(1+e^(-z)))</li>
+          <li><strong>Backpropagation:</strong> Algoritmo que calcula gradientes para ajustar pesos</li>
+          <li><strong>Mini-batch:</strong> Divide dados em lotes para treinamento mais eficiente</li>
+          <li><strong>Cross-Entropy Loss:</strong> Função de custo para classificação multi-classe</li>
+          <li><strong>Gradient Clipping:</strong> Previne explosão de gradientes</li>
+          <li><strong>Early Stopping:</strong> Para o treinamento se não houver melhoria</li>
         </ul>
+
+        <h4>💡 Configurações Recomendadas:</h4>
+        <ul>
+          <li><strong>Arquitetura:</strong> 64,32 ou 128,64 (não exagere!)</li>
+          <li><strong>Learning Rate:</strong> 0.2-0.3 (mais alto = converge rápido)</li>
+          <li><strong>Batch Size:</strong> 16-32 (menor = mais atualizações)</li>
+          <li><strong>Épocas:</strong> 200-400 (early stopping evita overfitting)</li>
+        </ul>
+
         <p className="info-note">
-          Cada neurônio aprende uma "pergunta binária". A combinação das respostas identifica a classe.
+          ⚠️ <strong>Evite:</strong> Arquiteturas muito grandes (ex: 512,256,128) causam overfitting em datasets pequenos!
         </p>
       </div>
     </div>
