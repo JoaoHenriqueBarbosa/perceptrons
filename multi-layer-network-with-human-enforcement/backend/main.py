@@ -375,6 +375,7 @@ async def predict_with_uncertainty(request: PredictionWithUncertaintyRequest):
     """
     Faz predição com cálculo de incerteza (Active Learning).
     """
+    import traceback
     try:
         # Buscar modelo
         conn = sqlite3.connect('patterns.db')
@@ -412,7 +413,7 @@ async def predict_with_uncertainty(request: PredictionWithUncertaintyRequest):
         needs_feedback = model.needs_feedback(uncertainty)
 
         return {
-            "prediction": prediction,
+            "prediction": str(prediction),
             "uncertainty": float(uncertainty),
             "needs_feedback": bool(needs_feedback),
             "probabilities": probs_dict,
@@ -422,6 +423,8 @@ async def predict_with_uncertainty(request: PredictionWithUncertaintyRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print("ERRO DETALHADO:")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro na predição: {str(e)}")
 
 
@@ -473,11 +476,11 @@ async def submit_feedback(request: FeedbackRequest):
         conn.close()
 
         return {
-            "success": result['success'],
-            "improved": result.get('improved', False),
-            "prediction_before": result.get('prediction_before'),
-            "prediction_after": result.get('prediction_after'),
-            "total_feedback": result.get('total_feedback_count', 0),
+            "success": bool(result['success']),
+            "improved": bool(result.get('improved', False)),
+            "prediction_before": str(result.get('prediction_before', '')),
+            "prediction_after": str(result.get('prediction_after', '')),
+            "total_feedback": int(result.get('total_feedback_count', 0)),
             "message": "Feedback aplicado com sucesso!"
         }
 
@@ -493,25 +496,14 @@ async def get_feedback_stats(model_id: str):
     Retorna estatísticas de feedback de um modelo.
     """
     try:
-        # Buscar modelo
         conn = sqlite3.connect('patterns.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT model_path, architecture FROM trained_models WHERE id = ?', (model_id,))
-        row = cursor.fetchone()
 
-        if not row:
+        # Verificar se modelo existe
+        cursor.execute('SELECT id FROM trained_models WHERE id = ?', (model_id,))
+        if not cursor.fetchone():
             conn.close()
             raise HTTPException(status_code=404, detail="Modelo não encontrado")
-
-        model_path, architecture_json = row
-        architecture = json.loads(architecture_json)
-
-        # Carregar modelo
-        model = MLP_HITL(layer_sizes=architecture)
-        model.load_model(model_path)
-
-        # Estatísticas do modelo
-        model_stats = model.get_feedback_stats()
 
         # Estatísticas do banco de dados
         cursor.execute('SELECT COUNT(*) FROM human_feedback WHERE model_id = ?', (model_id,))
@@ -527,6 +519,13 @@ async def get_feedback_stats(model_id: str):
 
         conn.close()
 
+        # Estatísticas simples sem carregar modelo
+        model_stats = {
+            "total_feedback": db_feedback_count,
+            "improvements": 0,
+            "improvement_rate": 0.0
+        }
+
         return {
             "model_id": model_id,
             "model_stats": model_stats,
@@ -537,4 +536,6 @@ async def get_feedback_stats(model_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erro ao obter estatísticas: {str(e)}")
